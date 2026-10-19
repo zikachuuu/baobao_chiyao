@@ -1,10 +1,12 @@
 import datetime
 import sqlite3
+from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import DATABASE_PATH, get_cycle_day
+from timezone import get_user_timezone
 
 
 def get_medicine_for_today(medicine: sqlite3.Row) -> dict | None:
@@ -13,7 +15,8 @@ def get_medicine_for_today(medicine: sqlite3.Row) -> dict | None:
     If the medicine is not due today, return None.
     '''
 
-    today = datetime.date.today()
+    local_now = datetime.datetime.now(ZoneInfo(medicine["timezone"]))
+    today = local_now.date()
     start_date = datetime.date.fromisoformat(medicine["start_date"])
     end_date = (
         datetime.date.fromisoformat(medicine["end_date"])
@@ -35,8 +38,10 @@ def get_medicine_for_today(medicine: sqlite3.Row) -> dict | None:
     reminder_time = datetime.datetime.strptime(
         medicine["reminder_time"], "%H:%M"
     ).time()
-    reminder_at = datetime.datetime.combine(today, reminder_time)
-    if reminder_at <= datetime.datetime.now():
+    reminder_at = datetime.datetime.combine(
+        today, reminder_time, tzinfo=ZoneInfo(medicine["timezone"])
+    )
+    if reminder_at <= local_now:
         return None
 
     return {
@@ -45,6 +50,7 @@ def get_medicine_for_today(medicine: sqlite3.Row) -> dict | None:
         "name": medicine["medicine_name"],
         "time": reminder_at,
         "snooze_mins": medicine["snooze_interval"],
+        "timezone": medicine["timezone"],
     }
 
 
@@ -57,9 +63,15 @@ def load_medicines() -> list[sqlite3.Row]:
         connection.row_factory = sqlite3.Row
         return connection.execute(
             """
-            SELECT id, chat_id, medicine_name, reminder_time, snooze_interval,
-                   days_on, days_off, start_date, initial_cycle_day, end_date
-            FROM medicines
+            SELECT m.id, m.chat_id, m.medicine_name,
+                   m.reminder_time, m.snooze_interval,
+                   m.user_id, m.days_on, m.days_off,
+                   m.start_date, m.initial_cycle_day,
+                   m.end_date,
+                   u.timezone
+            FROM medicines AS m
+            JOIN users AS u ON u.user_id = m.user_id
+            WHERE u.timezone IS NOT NULL
             """
         ).fetchall()
 
@@ -74,10 +86,15 @@ def load_medicine(medicine_id: int) -> sqlite3.Row | None:
         connection.row_factory = sqlite3.Row
         return connection.execute(
             """
-            SELECT id, chat_id, medicine_name, reminder_time, snooze_interval,
-                   days_on, days_off, start_date, initial_cycle_day, end_date
-            FROM medicines
-            WHERE id = ?
+            SELECT m.id, m.chat_id, m.medicine_name,
+                   m.reminder_time, m.snooze_interval,
+                   m.user_id, m.days_on, m.days_off,
+                   m.start_date, m.initial_cycle_day,
+                   m.end_date,
+                   u.timezone
+            FROM medicines AS m
+            JOIN users AS u ON u.user_id = m.user_id
+            WHERE m.id = ?
             """,
             (medicine_id,),
         ).fetchone()
@@ -101,7 +118,9 @@ def schedule_medicine_for_today(
 
     context.job_queue.run_once(
         send_reminder,
-        when=med["time"] - datetime.datetime.now(),
+        when=med["time"] - datetime.datetime.now(
+            ZoneInfo(med["timezone"])
+        ),
         data=med,
         name=f"med_{med['id']}_first",
     )
@@ -116,6 +135,55 @@ async def check_daily_medicines(context: ContextTypes.DEFAULT_TYPE) -> None:
         schedule_medicine_for_today(context, medicine)
 
 
+async def check_user_medicines(context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = context.job.data["user_id"]
+    for medicine in load_medicines():
+        if medicine["user_id"] == user_id:
+            schedule_medicine_for_today(context, medicine)
+
+
+def ensure_user_daily_schedule(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+) -> None:
+    for job in context.job_queue.get_jobs_by_name(f"med_user_{user_id}_daily"):
+        job.schedule_removal()
+
+    timezone_name = get_user_timezone(user_id)
+    if timezone_name:
+        context.job_queue.run_daily(
+            check_user_medicines,
+            time=datetime.time(0, 1, tzinfo=ZoneInfo(timezone_name)),
+            data={"user_id": user_id},
+            name=f"med_user_{user_id}_daily",
+        )
+
+
+def reset_user_schedule(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+) -> None:
+    for medicine in load_medicines():
+        if medicine["user_id"] == user_id:
+            for job in context.job_queue.get_jobs_by_name(
+                f"med_{medicine['id']}_first"
+            ):
+                job.schedule_removal()
+            for job in context.job_queue.get_jobs_by_name(
+                f"med_{medicine['id']}_snooze"
+            ):
+                job.schedule_removal()
+    ensure_user_daily_schedule(context, user_id)
+
+
+async def schedule_all_user_jobs(context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_ids = {medicine["user_id"] for medicine in load_medicines()}
+    for user_id in user_ids:
+        reset_user_schedule(context, user_id)
+    for medicine in load_medicines():
+        schedule_medicine_for_today(context, medicine)
+
+
 async def schedule_new_medicine(
     context: ContextTypes.DEFAULT_TYPE,
     medicine_id: int,
@@ -125,6 +193,7 @@ async def schedule_new_medicine(
     """
     medicine = load_medicine(medicine_id)
     if medicine is not None:
+        ensure_user_daily_schedule(context, medicine["user_id"])
         schedule_medicine_for_today(context, medicine)
 
 
@@ -138,11 +207,23 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
         InlineKeyboardButton("✅ Eaten", callback_data=f"eaten_{med['id']}"),
         InlineKeyboardButton("❌ Forgot to bring", callback_data=f"forgot_{med['id']}"),
     ]]
-    await context.bot.send_message(
+    message = await context.bot.send_message(
         chat_id=med["chat_id"],
         text=f"💊 Time to take your {med['name']}!",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
+    reminder_date = datetime.datetime.now(
+        ZoneInfo(med["timezone"])
+    ).date().isoformat()
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        connection.execute(
+            """
+            INSERT INTO reminder_messages (
+                med_id, reminder_date, message_id
+            ) VALUES (?, ?, ?)
+            """,
+            (med["id"], reminder_date, message.message_id),
+        )
     context.job_queue.run_once(
         send_reminder,
         when=med["snooze_mins"] * 60,

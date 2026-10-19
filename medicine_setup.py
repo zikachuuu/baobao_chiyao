@@ -12,6 +12,7 @@ from telegram.ext import (
 )
 
 from database import DATABASE_PATH
+from timezone import get_user_timezone, start_timezone_setup
 
 
 
@@ -19,6 +20,14 @@ MED_NAME, TIME, SNOOZE, DAYS_ON, DAYS_OFF, CURRENT_STATUS, CURRENT_STATUS_DAY, E
 
 
 async def start_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.effective_user
+    if user is None or get_user_timezone(user.id) is None:
+        await start_timezone_setup(
+            update,
+            context,
+            "Set your timezone before adding medicines. Please share your current location.",
+        )
+        return ConversationHandler.END
     await update.message.reply_text("Let's set up a new medicine. What is the name?")
     return MED_NAME
 

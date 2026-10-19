@@ -14,7 +14,8 @@ def initialize_database() -> None:
             """
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL
+                name TEXT NOT NULL,
+                timezone TEXT
             );
 
             CREATE TABLE IF NOT EXISTS medicines (
@@ -51,11 +52,71 @@ def initialize_database() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 med_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                log_date TEXT,
                 status TEXT NOT NULL CHECK (status IN ('eaten', 'forgot')),
+                FOREIGN KEY (med_id) REFERENCES medicines (id)
+            );
+
+            CREATE TABLE IF NOT EXISTS reminder_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                med_id INTEGER NOT NULL,
+                reminder_date TEXT NOT NULL,
+                message_id INTEGER NOT NULL,
                 FOREIGN KEY (med_id) REFERENCES medicines (id)
             );
             """
         )
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
+        if "timezone" not in columns:
+            connection.execute("ALTER TABLE users ADD COLUMN timezone TEXT")
+        log_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(logs)")
+        }
+        if "log_date" not in log_columns:
+            connection.execute("ALTER TABLE logs ADD COLUMN log_date TEXT")
+            connection.execute(
+                "UPDATE logs SET log_date = date(timestamp) WHERE log_date IS NULL"
+            )
+        connection.execute(
+            """
+            DELETE FROM logs
+            WHERE id NOT IN (
+                SELECT MIN(id) FROM logs
+                WHERE log_date IS NOT NULL
+                GROUP BY med_id, log_date
+            )
+            AND log_date IS NOT NULL
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_med_date
+            ON logs (med_id, log_date)
+            """
+        )
+        reminder_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(reminder_messages)")
+        }
+        if "chat_id" in reminder_columns:
+            connection.executescript(
+                """
+                ALTER TABLE reminder_messages RENAME TO reminder_messages_old;
+                CREATE TABLE reminder_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    med_id INTEGER NOT NULL,
+                    reminder_date TEXT NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    FOREIGN KEY (med_id) REFERENCES medicines (id)
+                );
+                INSERT INTO reminder_messages (
+                    id, med_id, reminder_date, message_id
+                )
+                SELECT id, med_id, reminder_date, message_id
+                FROM reminder_messages_old;
+                DROP TABLE reminder_messages_old;
+                """
+            )
 
 
 def get_cycle_day(

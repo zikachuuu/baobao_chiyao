@@ -11,6 +11,7 @@ from telegram.ext import (
 )
 
 from database import DATABASE_PATH, get_first_on_date
+from timezone import get_user_timezone, start_timezone_setup
 
 
 MEDICINE, VIEW_TYPE, PERIOD = range(3)
@@ -33,6 +34,15 @@ def _load_medicines(user_id: int) -> list[sqlite3.Row]:
 
 
 async def start_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.effective_user
+    if user is None or get_user_timezone(user.id) is None:
+        await start_timezone_setup(
+            update,
+            context,
+            "Set your timezone before viewing medicine information. Please share your current location.",
+        )
+        return ConversationHandler.END
+
     user = update.effective_user
     if user is None:
         await update.message.reply_text("Unable to identify your Telegram account.")
