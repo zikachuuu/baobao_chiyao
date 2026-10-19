@@ -1,4 +1,5 @@
 import datetime
+import os
 import sqlite3
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -12,9 +13,6 @@ from telegram.ext import (
 from database import DATABASE_PATH, get_cycle_day, initialize_database
 from info import get_info_conv_handler
 from medicine_setup import get_conv_handler
-
-TOKEN = "8650011922:AAHjDWBzZ7ajpGHsm1piDgOIJUzCHXuvV-4"
-
 
 async def check_daily_medicines(context: ContextTypes.DEFAULT_TYPE):
     """Schedule the first reminder for each medicine due today."""
@@ -107,7 +105,13 @@ async def handle_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 def main():
     initialize_database()
-    app = Application.builder().token(TOKEN).build()
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise RuntimeError(
+            "TELEGRAM_BOT_TOKEN is not set. Configure it in the environment before starting the bot."
+        )
+
+    app = Application.builder().token(token).build()
     app.job_queue.run_daily(
         check_daily_medicines,
         time=datetime.time(hour=0, minute=1),
