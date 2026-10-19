@@ -59,14 +59,18 @@ def get_cycle_day(
 ) -> int:
     """Return the zero-based cycle position for a medicine date."""
     cycle_length = days_on + days_off
-    if initial_cycle_day < 0:
-        initial_position = abs(initial_cycle_day) - 1
-    elif initial_cycle_day > 0:
-        initial_position = days_on + initial_cycle_day - 1
-    else:
-        initial_position = 0
 
-    return (initial_position + days_elapsed) % cycle_length
+    if initial_cycle_day < 0:
+        # e.g., -3 (3rd day ON) maps to index 2
+        start_index = abs(initial_cycle_day) - 1
+    elif initial_cycle_day > 0:
+        # e.g., 2 (2nd day OFF) maps to index (days_on + 2 - 1)
+        start_index = days_on + initial_cycle_day - 1
+    else:
+        raise ValueError("initial_cycle_day cannot be zero")
+
+    # Simply advance the cycle by the number of days elapsed
+    return (start_index + days_elapsed) % cycle_length
 
 
 def get_first_on_date(

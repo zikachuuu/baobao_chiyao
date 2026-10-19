@@ -2,6 +2,9 @@ import datetime
 import os
 import sqlite3
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
@@ -34,15 +37,21 @@ async def check_daily_medicines(context: ContextTypes.DEFAULT_TYPE):
             if medicine["end_date"]
             else None
         )
+        
         if today < start_date or (end_date and today > end_date):
             continue
 
+        # Use .days instead of .day, and do not add +1
+        days_elapsed = (today - start_date).days
+
         current_cycle_day = get_cycle_day(
-            (today - start_date).days,
+            days_elapsed,
             medicine["days_on"],
             medicine["days_off"],
             medicine["initial_cycle_day"],
         )
+        
+        # If current_cycle_day is >= days_on, it's an OFF day.
         if current_cycle_day >= medicine["days_on"]:
             continue
 
