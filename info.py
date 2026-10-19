@@ -17,7 +17,7 @@ MEDICINE, VIEW_TYPE, PERIOD = range(3)
 PERIODS = {"current": 1, "3": 3, "5": 5, "10": 10}
 
 
-def _load_medicines(chat_id: int) -> list[sqlite3.Row]:
+def _load_medicines(user_id: int) -> list[sqlite3.Row]:
     with sqlite3.connect(DATABASE_PATH) as connection:
         connection.row_factory = sqlite3.Row
         return connection.execute(
@@ -25,15 +25,20 @@ def _load_medicines(chat_id: int) -> list[sqlite3.Row]:
             SELECT id, medicine_name, days_on, days_off, start_date,
                    initial_cycle_day, end_date
             FROM medicines
-            WHERE chat_id = ?
+            WHERE user_id = ?
             ORDER BY id
             """,
-            (chat_id,),
+            (user_id,),
         ).fetchall()
 
 
 async def start_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    medicines = _load_medicines(update.message.chat_id)
+    user = update.effective_user
+    if user is None:
+        await update.message.reply_text("Unable to identify your Telegram account.")
+        return ConversationHandler.END
+
+    medicines = _load_medicines(user.id)
     if not medicines:
         await update.message.reply_text("No medicines have been added yet. Use /addmed first.")
         return ConversationHandler.END
@@ -157,12 +162,23 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return PERIOD
 
     med_id = context.user_data["info_med_id"]
+    user = update.effective_user
+    if user is None:
+        await update.message.reply_text("Unable to identify your Telegram account.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
     with sqlite3.connect(DATABASE_PATH) as connection:
         connection.row_factory = sqlite3.Row
         medicine = connection.execute(
-            "SELECT * FROM medicines WHERE id = ? AND chat_id = ?",
-            (med_id, update.message.chat_id),
+            "SELECT * FROM medicines WHERE id = ? AND user_id = ?",
+            (med_id, user.id),
         ).fetchone()
+
+    if medicine is None:
+        await update.message.reply_text("That medicine is not available to your account.")
+        context.user_data.clear()
+        return ConversationHandler.END
 
     report = _get_report(medicine, PERIODS[period], datetime.date.today())
     if not report:
@@ -198,11 +214,11 @@ async def cancel_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 def get_info_conv_handler() -> ConversationHandler:
     text = MessageHandler(filters.TEXT & ~filters.COMMAND, choose_medicine)
     return ConversationHandler(
-        entry_points=[CommandHandler("info", start_info)],
-        states={
-            MEDICINE: [text],
-            VIEW_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_view)],
-            PERIOD: [MessageHandler(filters.TEXT & ~filters.COMMAND, show_info)],
+        entry_points    = [CommandHandler("info", start_info)],
+        states          = {
+            MEDICINE    : [text],
+            VIEW_TYPE   : [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_view)],
+            PERIOD      : [MessageHandler(filters.TEXT & ~filters.COMMAND, show_info)],
         },
-        fallbacks=[CommandHandler("cancel", cancel_info)],
+        fallbacks       = [CommandHandler("cancel", cancel_info)],
     )

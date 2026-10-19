@@ -24,13 +24,31 @@ async def handle_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE
     Handle the button click for marking a medicine as eaten or forgotten.
     '''
     query = update.callback_query
-    await query.answer()
     action, med_id = query.data.split("_", 1)
 
+    if update.effective_user is None:
+        await query.answer("Unable to identify your Telegram account.", show_alert=True)
+        return
+
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        medicine = connection.execute(
+            "SELECT user_id FROM medicines WHERE id = ?",
+            (int(med_id),),
+        ).fetchone()
+
+    if medicine is None or medicine[0] != update.effective_user.id:
+        await query.answer(
+            "Only the person who added this medicine can respond.",
+            show_alert=True,
+        )
+        return
+
+    await query.answer()
     for job in context.job_queue.get_jobs_by_name(f"med_{med_id}_snooze"):
         job.schedule_removal()
 
     with sqlite3.connect(DATABASE_PATH) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
         connection.execute(
             "INSERT INTO logs (med_id, status) VALUES (?, ?)",
             (int(med_id), action),

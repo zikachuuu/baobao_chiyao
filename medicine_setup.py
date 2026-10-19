@@ -146,6 +146,10 @@ async def save_medicine(
             return END_DATE
 
     data = context.user_data
+    user = update.effective_user
+    if user is None:
+        await update.message.reply_text("Unable to identify your Telegram account.")
+        return END_DATE
 
     # Initial cycle day is negative to indicate that the medicine is current in the "on" phase (on medication)
     initial_cycle_day = data["current_day"]
@@ -153,15 +157,25 @@ async def save_medicine(
         initial_cycle_day = -initial_cycle_day
 
     with sqlite3.connect(DATABASE_PATH) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            """
+            INSERT INTO users (user_id, name)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET name = excluded.name
+            """,
+            (user.id, user.full_name),
+        )
         connection.execute(
             """
             INSERT INTO medicines (
-                chat_id, medicine_name, reminder_time, snooze_interval,
+                user_id, chat_id, medicine_name, reminder_time, snooze_interval,
                 days_on, days_off, start_date, initial_cycle_day, end_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                update.message.chat_id,
+                user.id,
+                update.effective_chat.id,
                 data["med_name"],
                 data["time"],
                 data["snooze"],
@@ -196,8 +210,8 @@ def get_conv_handler(schedule_medicine=None) -> ConversationHandler:
     #   The conversation can be canceled at any time with the /cancel command.
 
     return ConversationHandler(
-        entry_points=[CommandHandler("add_medicine", start_setup)],
-        states={
+        entry_points    = [CommandHandler("add_medicine", start_setup)],
+        states          = {
             MED_NAME            : [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_time)],
             TIME                : [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_snooze)],
             SNOOZE              : [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_days_on)],
@@ -205,7 +219,7 @@ def get_conv_handler(schedule_medicine=None) -> ConversationHandler:
             DAYS_OFF            : [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_current_status)],
             CURRENT_STATUS      : [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_current_status_day)],
             CURRENT_STATUS_DAY  : [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_end_date)],
-            END_DATE          : [
+            END_DATE            : [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     lambda update, context: save_medicine(
@@ -214,5 +228,5 @@ def get_conv_handler(schedule_medicine=None) -> ConversationHandler:
                 )
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks       = [CommandHandler("cancel", cancel)],
     )

@@ -12,8 +12,14 @@ def initialize_database() -> None:
         connection.execute("PRAGMA foreign_keys = ON")
         connection.executescript(
             """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS medicines (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
                 chat_id INTEGER NOT NULL,
                 medicine_name TEXT NOT NULL,
                 reminder_time TEXT NOT NULL CHECK (
@@ -37,7 +43,8 @@ def initialize_database() -> None:
                         initial_cycle_day > 0
                         AND initial_cycle_day <= days_off
                     )
-                )
+                ),
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
             );
 
             CREATE TABLE IF NOT EXISTS logs (
