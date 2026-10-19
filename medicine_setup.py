@@ -130,7 +130,11 @@ async def ask_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return END_DATE
 
 
-async def save_medicine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def save_medicine(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    schedule_medicine=None,
+) -> int:
     end_date_text = update.message.text.strip().lower()
     if end_date_text == "none":
         end_date = None
@@ -168,8 +172,11 @@ async def save_medicine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 end_date,
             ),
         )
+        medicine_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     await update.message.reply_text(f"✅ Setup complete for {data['med_name']}!")
+    if schedule_medicine is not None:
+        await schedule_medicine(context, medicine_id)
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -180,7 +187,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
-def get_conv_handler() -> ConversationHandler:
+def get_conv_handler(schedule_medicine=None) -> ConversationHandler:
     # Define the conversation handler for the medicine setup process
     # This function returns a ConversationHandler that manages the flow of the medicine setup conversation.
     # The conversation starts with the /addmedicine command and progresses through various states,
@@ -198,7 +205,14 @@ def get_conv_handler() -> ConversationHandler:
             DAYS_OFF            : [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_current_status)],
             CURRENT_STATUS      : [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_current_status_day)],
             CURRENT_STATUS_DAY  : [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_end_date)],
-            END_DATE            : [MessageHandler(filters.TEXT & ~filters.COMMAND, save_medicine)],
+            END_DATE          : [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    lambda update, context: save_medicine(
+                        update, context, schedule_medicine
+                    ),
+                )
+            ],
         },
-        fallbacks=[CommandHandler("cancel_add_medicine", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
