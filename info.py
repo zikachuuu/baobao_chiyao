@@ -134,10 +134,10 @@ def _get_report(
         connection.row_factory = sqlite3.Row
         logs = connection.execute(
             """
-            SELECT date(timestamp) AS log_date, status
+            SELECT log_date, status
             FROM logs
-            WHERE med_id = ? AND date(timestamp) BETWEEN ? AND ?
-            ORDER BY timestamp
+            WHERE med_id = ? AND log_date BETWEEN ? AND ?
+            ORDER BY log_date, log_time
             """,
             (medicine["id"], first_date.isoformat(), last_date.isoformat()),
         ).fetchall()

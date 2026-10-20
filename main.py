@@ -58,15 +58,19 @@ async def handle_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE
     local_date = datetime.datetime.now(
         ZoneInfo(medicine[1])
     ).date().isoformat()
+    local_time = datetime.datetime.now(
+        ZoneInfo(medicine[1])
+    ).time().isoformat(timespec="seconds")
     with sqlite3.connect(DATABASE_PATH) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
         try:
             connection.execute(
                 """
-                INSERT INTO logs (med_id, log_date, status)
-                VALUES (?, ?, ?)
+                INSERT INTO logs (
+                    med_id, log_date, log_time, log_timezone, status
+                ) VALUES (?, ?, ?, ?, ?)
                 """,
-                (int(med_id), local_date, action),
+                (int(med_id), local_date, local_time, medicine[1], action),
             )
         except sqlite3.IntegrityError:
             await query.answer(

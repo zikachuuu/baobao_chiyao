@@ -101,14 +101,17 @@ async def _start_command(
     user = update.effective_user
     if user is not None and get_user_timezone(user.id):
         await update.message.reply_text(
-            "Welcome back. Use /add_medicine to add a medicine, "
-            "/info to view your logs, or /timezone to update your timezone."
+            f"Welcome back {user.full_name}. Use \n"
+            f" • /add_medicine to add a new medicine 💊, \n"
+            f" • /info to view your medication history 📄, or \n"
+            f" • /timezone to update your timezone 🌎🕙."
         )
         return ConversationHandler.END
     return await start_timezone_setup(
         update,
         context,
-        "Welcome! Please share your current location to enable reminders.",
+        f"Welcome {user.full_name}! \n"
+        f"Please start by sharing your current location to enable reminders.",
     )
 
 

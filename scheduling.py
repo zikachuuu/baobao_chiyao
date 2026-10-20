@@ -3,6 +3,7 @@ import sqlite3
 from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from database import DATABASE_PATH, get_cycle_day
@@ -54,6 +55,26 @@ def get_medicine_for_today(medicine: sqlite3.Row) -> dict | None:
     }
 
 
+def is_medication_day(medicine: sqlite3.Row, date: datetime.date) -> bool:
+    start_date = datetime.date.fromisoformat(medicine["start_date"])
+    end_date = (
+        datetime.date.fromisoformat(medicine["end_date"])
+        if medicine["end_date"]
+        else None
+    )
+    if date < start_date or (end_date and date > end_date):
+        return False
+    return (
+        get_cycle_day(
+            (date - start_date).days,
+            medicine["days_on"],
+            medicine["days_off"],
+            medicine["initial_cycle_day"],
+        )
+        < medicine["days_on"]
+    )
+
+
 def load_medicines() -> list[sqlite3.Row]:
     '''
     Load all medicines from the database and return them as a list of sqlite3.Row objects.
@@ -65,6 +86,7 @@ def load_medicines() -> list[sqlite3.Row]:
             """
             SELECT m.id, m.chat_id, m.medicine_name,
                    m.reminder_time, m.snooze_interval,
+                   m.time_format,
                    m.user_id, m.days_on, m.days_off,
                    m.start_date, m.initial_cycle_day,
                    m.end_date,
@@ -88,6 +110,7 @@ def load_medicine(medicine_id: int) -> sqlite3.Row | None:
             """
             SELECT m.id, m.chat_id, m.medicine_name,
                    m.reminder_time, m.snooze_interval,
+                   m.time_format,
                    m.user_id, m.days_on, m.days_off,
                    m.start_date, m.initial_cycle_day,
                    m.end_date,
@@ -137,9 +160,62 @@ async def check_daily_medicines(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def check_user_medicines(context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = context.job.data["user_id"]
-    for medicine in load_medicines():
+    medicines = load_medicines()
+    timezone_name = get_user_timezone(user_id)
+    if timezone_name:
+        yesterday = datetime.datetime.now(
+            ZoneInfo(timezone_name)
+        ).date() - datetime.timedelta(days=1)
+        for medicine in medicines:
+            if medicine["user_id"] == user_id:
+                await finalize_pending_medicine(context, medicine, yesterday)
+
+    for medicine in medicines:
         if medicine["user_id"] == user_id:
             schedule_medicine_for_today(context, medicine)
+
+
+async def finalize_pending_medicine(
+    context: ContextTypes.DEFAULT_TYPE,
+    medicine: sqlite3.Row,
+    date: datetime.date,
+) -> None:
+    if not is_medication_day(medicine, date):
+        return
+
+    timezone_name = medicine["timezone"]
+    log_date = date.isoformat()
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        try:
+            connection.execute(
+                """
+                INSERT INTO logs (
+                    med_id, log_date, log_time, log_timezone, status
+                ) VALUES (?, ?, ?, ?, 'forgot')
+                """,
+                (medicine["id"], log_date, "23:59:59", timezone_name),
+            )
+        except sqlite3.IntegrityError:
+            return
+        reminder_messages = connection.execute(
+            """
+            SELECT message_id
+            FROM reminder_messages
+            WHERE med_id = ? AND reminder_date = ?
+            """,
+            (medicine["id"], log_date),
+        ).fetchall()
+
+    for (message_id,) in reminder_messages:
+        try:
+            await context.bot.edit_message_reply_markup(
+                chat_id=medicine["chat_id"],
+                message_id=message_id,
+                reply_markup=None,
+            )
+        except TelegramError:
+            continue
 
 
 def ensure_user_daily_schedule(

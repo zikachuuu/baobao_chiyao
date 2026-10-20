@@ -37,8 +37,11 @@ python main.py
   their new location, then existing timezone-dependent reminder jobs are
   canceled and recreated.
 - `/add_medicine` — Starts the medicine setup flow. It collects the medicine
-  name, reminder time, snooze interval, medication days, rest days, today's
-  medication/rest status and day number, and optional end date.
+  name, reminder time in either `HH:MM` 24-hour format or `HH:MM am/pm`
+  12-hour format, snooze interval, medication days, rest days, today's
+  medication/rest status and day number, and optional end date. Times are
+  stored internally in 24-hour format while the selected display preference is
+  retained.
 - `/info` — Shows medicine information for the current user's medicine list.
   The user can choose a summary or daily logs for the current cycle or the
   last 3, 5, or 10 cycles.

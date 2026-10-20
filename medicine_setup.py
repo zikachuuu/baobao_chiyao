@@ -28,7 +28,7 @@ async def start_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             "Set your timezone before adding medicines. Please share your current location.",
         )
         return ConversationHandler.END
-    await update.message.reply_text("Let's set up a new medicine. What is the name?")
+    await update.message.reply_text("Let's add a new medicine to reminder. What is the name?")
     return MED_NAME
 
 
@@ -42,19 +42,50 @@ async def ask_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     context.user_data["med_name"] = medicine_name
     await update.message.reply_text(
-        f"Got it. What time to take {context.user_data['med_name']} everyday? (HH:MM)"
+        f"Got it. What time to take {context.user_data['med_name']} every day? "
+        "Use HH:MM for 24-hour time, or HH:MM am/pm for 12-hour time."
     )
     return TIME
 
 
 async def ask_snooze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        datetime.datetime.strptime(update.message.text.strip(), "%H:%M")
-    except ValueError:
-        await update.message.reply_text("Please use 24-hour HH:MM format, for example 08:30 (NOT 8:30).")
+    time_input = update.message.text.strip()
+    match = re.fullmatch(
+        r"(\d{1,2}):([0-5]\d)\s*(am|pm)?",
+        time_input,
+        re.IGNORECASE,
+    )
+    if match is None:
+        await update.message.reply_text(
+            "Please use HH:MM, or HH:MM am/pm. For example: 08:30, "
+            "8:30, 08:30 pm, or 8:30AM."
+        )
         return TIME
-    
-    context.user_data["time"] = update.message.text.strip()
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    suffix = match.group(3)
+    if suffix is None:
+        if hour > 23:
+            await update.message.reply_text(
+                "24-hour time must use an hour from 00 to 23."
+            )
+            return TIME
+        time_format = "24h"
+    else:
+        if hour < 1 or hour > 12:
+            await update.message.reply_text(
+                "12-hour time must use an hour from 1 to 12."
+            )
+            return TIME
+        if suffix.lower() == "am":
+            hour = 0 if hour == 12 else hour
+        else:
+            hour = 12 if hour == 12 else hour + 12
+        time_format = "12h"
+
+    context.user_data["time"] = f"{hour:02d}:{minute:02d}"
+    context.user_data["time_format"] = time_format
     await update.message.reply_text(f"From {context.user_data['time']} each day, how often do you want to be reminded if you haven't taken {context.user_data['med_name']}? (in minutes)")
     return SNOOZE
 
@@ -178,15 +209,17 @@ async def save_medicine(
         connection.execute(
             """
             INSERT INTO medicines (
-                user_id, chat_id, medicine_name, reminder_time, snooze_interval,
+                user_id, chat_id, medicine_name, reminder_time, time_format,
+                snooze_interval,
                 days_on, days_off, start_date, initial_cycle_day, end_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user.id,
                 update.effective_chat.id,
                 data["med_name"],
                 data["time"],
+                data["time_format"],
                 data["snooze"],
                 data["days_on"],
                 data["days_off"],

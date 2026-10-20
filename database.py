@@ -27,6 +27,9 @@ def initialize_database() -> None:
                     reminder_time GLOB '[0-1][0-9]:[0-5][0-9]'
                     OR reminder_time GLOB '2[0-3]:[0-5][0-9]'
                 ),
+                time_format TEXT NOT NULL DEFAULT '24h' CHECK (
+                    time_format IN ('12h', '24h')
+                ),
                 snooze_interval INTEGER NOT NULL CHECK (snooze_interval >= 0),
                 days_on INTEGER NOT NULL CHECK (days_on >= 0),
                 days_off INTEGER NOT NULL CHECK (days_off >= 0),
@@ -51,8 +54,9 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 med_id INTEGER NOT NULL,
-                timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                log_date TEXT,
+                log_date TEXT NOT NULL,
+                log_time TEXT NOT NULL,
+                log_timezone TEXT NOT NULL,
                 status TEXT NOT NULL CHECK (status IN ('eaten', 'forgot')),
                 FOREIGN KEY (med_id) REFERENCES medicines (id)
             );
@@ -69,25 +73,49 @@ def initialize_database() -> None:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
         if "timezone" not in columns:
             connection.execute("ALTER TABLE users ADD COLUMN timezone TEXT")
-        log_columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(logs)")
+        medicine_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(medicines)")
         }
-        if "log_date" not in log_columns:
-            connection.execute("ALTER TABLE logs ADD COLUMN log_date TEXT")
+        if "time_format" not in medicine_columns:
             connection.execute(
-                "UPDATE logs SET log_date = date(timestamp) WHERE log_date IS NULL"
+                """
+                ALTER TABLE medicines
+                ADD COLUMN time_format TEXT NOT NULL DEFAULT '24h'
+                CHECK (time_format IN ('12h', '24h'))
+                """
             )
-        connection.execute(
-            """
-            DELETE FROM logs
-            WHERE id NOT IN (
-                SELECT MIN(id) FROM logs
-                WHERE log_date IS NOT NULL
-                GROUP BY med_id, log_date
+        log_columns = {row[1] for row in connection.execute("PRAGMA table_info(logs)")}
+        if "timestamp" in log_columns or "log_time" not in log_columns:
+            connection.executescript(
+                """
+                DROP INDEX IF EXISTS idx_logs_med_date;
+                ALTER TABLE logs RENAME TO logs_old;
+                CREATE TABLE logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    med_id INTEGER NOT NULL,
+                    log_date TEXT NOT NULL,
+                    log_time TEXT NOT NULL,
+                    log_timezone TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('eaten', 'forgot')),
+                    FOREIGN KEY (med_id) REFERENCES medicines (id)
+                );
+                INSERT OR IGNORE INTO logs (
+                    id, med_id, log_date, log_time, log_timezone, status
+                )
+                SELECT
+                    old.id,
+                    old.med_id,
+                    COALESCE(old.log_date, date(old.timestamp)),
+                    time(old.timestamp),
+                    COALESCE(users.timezone, 'UTC'),
+                    old.status
+                FROM logs_old AS old
+                JOIN medicines ON medicines.id = old.med_id
+                JOIN users ON users.user_id = medicines.user_id;
+                DROP TABLE logs_old;
+                """
             )
-            AND log_date IS NOT NULL
-            """
-        )
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_med_date
